@@ -154,11 +154,12 @@ class ShapeChangeTransformer:
     default_outputs = [{'mimeType': 'application/zip', 'defaultExtension': 'zip'}]
 
     def transform(self, metadata):
+        logger.info('ShapeChange transform starting')
         input_data = metadata.input_data
         if isinstance(input_data, str):
             input_data = input_data.encode('latin-1')
 
-        logger.info('ShapeChange transform starting (input: %d bytes)', len(input_data))
+        logger.info('ShapeChange input: %d bytes', len(input_data))
 
         if not _is_sqlite3(input_data):
             logger.warning(
