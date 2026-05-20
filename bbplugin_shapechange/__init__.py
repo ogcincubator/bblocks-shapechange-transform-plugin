@@ -124,6 +124,8 @@ class ShapeChangeTransformer:
         if isinstance(input_data, str):
             input_data = input_data.encode('latin-1')
 
+        logger.info('ShapeChange transform starting (input: %d bytes)', len(input_data))
+
         if not _is_sqlite3(input_data):
             logger.warning(
                 'Input is not a SQLite3-based EA model (.eapx/.qea). '
@@ -132,8 +134,11 @@ class ShapeChangeTransformer:
             )
             return None
 
+        logger.info('Input is SQLite3-based EA model, proceeding')
         java = _ensure_jvm()
+        logger.info('Using JRE: %s', java)
         jar = _ensure_shapechange()
+        logger.info('Using ShapeChange JAR: %s', jar)
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -148,14 +153,21 @@ class ShapeChangeTransformer:
             config_file = tmp / 'config.xml'
             config_file.write_text(config, encoding='utf-8')
 
+            logger.info('Running ShapeChange: %s -jar %s -c %s', java, jar, config_file)
             proc = subprocess.run(
                 [java, '-jar', jar, '-c', str(config_file)],
                 capture_output=True,
                 text=True,
                 cwd=str(tmp),
             )
+            logger.info('ShapeChange exited with code %d', proc.returncode)
+            if proc.stdout:
+                logger.info('ShapeChange stdout: %s', proc.stdout[:2000])
+            if proc.stderr:
+                logger.info('ShapeChange stderr: %s', proc.stderr[:2000])
 
             output_files = [f for f in output_dir.rglob('*') if f.is_file()]
+            logger.info('ShapeChange output files: %s', [str(f.relative_to(output_dir)) for f in output_files])
 
             if proc.returncode != 0 and not output_files:
                 raise RuntimeError(
