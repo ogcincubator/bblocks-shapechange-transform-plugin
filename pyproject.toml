@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbplugin-shapechange"
+version = "0.1.0"
+description = "bblocks transform plugin: ShapeChange model processor"
+requires-python = ">=3.10"
+dependencies = []
