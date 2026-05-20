@@ -1,15 +1,18 @@
 import io
-import logging
 import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+
+def _log(msg, *args):
+    print(msg % args if args else msg, file=sys.stderr, flush=True)
+
 
 _CACHE_DIR = Path(__file__).parent / '_cache'
 
@@ -51,13 +54,13 @@ _opener = urllib.request.build_opener(_UARedirectHandler)
 
 
 def _download(url, dest):
-    logger.info('Downloading %s -> %s', url, dest)
+    _log('Downloading %s -> %s', url, dest)
     req = urllib.request.Request(url, headers={'User-Agent': 'bbplugin-shapechange'})
     try:
         with _opener.open(req) as resp, open(dest, 'wb') as f:
             f.write(resp.read())
     except Exception as e:
-        logger.error('Failed to download %s: %s', url, e)
+        _log('ERROR: Failed to download %s: %s', url, e)
         raise
 
 
@@ -123,14 +126,11 @@ def _ensure_shapechange():
             name = Path(member).name
             parts = Path(member).parts
             if member.endswith('.jar') and len(parts) == 1:
-                # Root-level JAR (thin launcher)
                 zf.extract(member, _CACHE_DIR)
             elif len(parts) >= 2 and parts[0] == 'lib' and member.endswith('.jar'):
-                # lib/ dependencies
                 lib_dir = _CACHE_DIR / 'lib'
                 lib_dir.mkdir(exist_ok=True)
-                target = lib_dir / name
-                target.write_bytes(zf.read(member))
+                (lib_dir / name).write_bytes(zf.read(member))
 
     zip_path.unlink()
     _SHAPECHANGE_MARKER.write_text(_SHAPECHANGE_VERSION)
@@ -154,26 +154,25 @@ class ShapeChangeTransformer:
     default_outputs = [{'mimeType': 'application/zip', 'defaultExtension': 'zip'}]
 
     def transform(self, metadata):
-        logger.info('ShapeChange transform starting')
         input_data = metadata.input_data
         if isinstance(input_data, str):
             input_data = input_data.encode('latin-1')
 
-        logger.info('ShapeChange input: %d bytes', len(input_data))
+        _log('ShapeChange transform starting (input: %d bytes)', len(input_data))
 
         if not _is_sqlite3(input_data):
-            logger.warning(
-                'Input is not a SQLite3-based EA model (.eapx/.qea). '
+            _log(
+                'WARNING: Input is not a SQLite3-based EA model (.eapx/.qea). '
                 'The old binary .eap format requires Enterprise Architect and is not supported. '
                 'Skipping ShapeChange transform.'
             )
             return None
 
-        logger.info('Input is SQLite3-based EA model, proceeding')
+        _log('Input is SQLite3-based EA model, proceeding')
         java = _ensure_jvm()
-        logger.info('Using JRE: %s', java)
+        _log('Using JRE: %s', java)
         jar = _ensure_shapechange()
-        logger.info('Using ShapeChange JAR: %s', jar)
+        _log('Using ShapeChange JAR: %s', jar)
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -188,21 +187,21 @@ class ShapeChangeTransformer:
             config_file = tmp / 'config.xml'
             config_file.write_text(config, encoding='utf-8')
 
-            logger.info('Running ShapeChange: %s -jar %s -c %s', java, jar, config_file)
+            _log('Running ShapeChange: %s -jar %s -c %s', java, jar, config_file)
             proc = subprocess.run(
                 [java, '-jar', jar, '-c', str(config_file)],
                 capture_output=True,
                 text=True,
                 cwd=str(_CACHE_DIR),
             )
-            logger.info('ShapeChange exited with code %d', proc.returncode)
+            _log('ShapeChange exited with code %d', proc.returncode)
             if proc.stdout:
-                logger.info('ShapeChange stdout: %s', proc.stdout[:2000])
+                _log('ShapeChange stdout: %s', proc.stdout[:2000])
             if proc.stderr:
-                logger.info('ShapeChange stderr: %s', proc.stderr[:2000])
+                _log('ShapeChange stderr: %s', proc.stderr[:2000])
 
             output_files = [f for f in output_dir.rglob('*') if f.is_file()]
-            logger.info('ShapeChange output files: %s', [str(f.relative_to(output_dir)) for f in output_files])
+            _log('ShapeChange output files: %s', [str(f.relative_to(output_dir)) for f in output_files])
 
             if proc.returncode != 0 and not output_files:
                 raise RuntimeError(
