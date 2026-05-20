@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 _CACHE_DIR = Path(__file__).parent / '_cache'
 
-_SHAPECHANGE_VERSION = '2.13.0'
-_SHAPECHANGE_JAR_URL = (
+_SHAPECHANGE_VERSION = '4.0.0'
+_SHAPECHANGE_ZIP_URL = (
     f'https://github.com/ShapeChange/ShapeChange/releases/download/'
-    f'v{_SHAPECHANGE_VERSION}/ShapeChange-{_SHAPECHANGE_VERSION}.jar'
+    f'{_SHAPECHANGE_VERSION}/ShapeChange-{_SHAPECHANGE_VERSION}.zip'
 )
 _SHAPECHANGE_JAR = _CACHE_DIR / f'ShapeChange-{_SHAPECHANGE_VERSION}.jar'
 _SHAPECHANGE_MARKER = _CACHE_DIR / 'downloaded-shapechange'
@@ -40,9 +40,25 @@ def _platform_info():
     return os_map[system], arch_map[machine]
 
 
+class _UARedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None:
+            new_req.add_unredirected_header('User-Agent', 'bbplugin-shapechange')
+        return new_req
+
+_opener = urllib.request.build_opener(_UARedirectHandler)
+
+
 def _download(url, dest):
     logger.info('Downloading %s -> %s', url, dest)
-    urllib.request.urlretrieve(url, dest)
+    req = urllib.request.Request(url, headers={'User-Agent': 'bbplugin-shapechange'})
+    try:
+        with _opener.open(req) as resp, open(dest, 'wb') as f:
+            f.write(resp.read())
+    except Exception as e:
+        logger.error('Failed to download %s: %s', url, e)
+        raise
 
 
 def _ensure_jvm():
@@ -98,7 +114,25 @@ def _ensure_shapechange():
             and _SHAPECHANGE_MARKER.read_text().strip() == _SHAPECHANGE_VERSION
             and _SHAPECHANGE_JAR.exists()):
         return str(_SHAPECHANGE_JAR)
-    _download(_SHAPECHANGE_JAR_URL, _SHAPECHANGE_JAR)
+
+    zip_path = _CACHE_DIR / f'ShapeChange-{_SHAPECHANGE_VERSION}.zip'
+    _download(_SHAPECHANGE_ZIP_URL, zip_path)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.namelist():
+            name = Path(member).name
+            parts = Path(member).parts
+            if member.endswith('.jar') and len(parts) == 1:
+                # Root-level JAR (thin launcher)
+                zf.extract(member, _CACHE_DIR)
+            elif len(parts) >= 2 and parts[0] == 'lib' and member.endswith('.jar'):
+                # lib/ dependencies
+                lib_dir = _CACHE_DIR / 'lib'
+                lib_dir.mkdir(exist_ok=True)
+                target = lib_dir / name
+                target.write_bytes(zf.read(member))
+
+    zip_path.unlink()
     _SHAPECHANGE_MARKER.write_text(_SHAPECHANGE_VERSION)
     return str(_SHAPECHANGE_JAR)
 
@@ -158,7 +192,7 @@ class ShapeChangeTransformer:
                 [java, '-jar', jar, '-c', str(config_file)],
                 capture_output=True,
                 text=True,
-                cwd=str(tmp),
+                cwd=str(_CACHE_DIR),
             )
             logger.info('ShapeChange exited with code %d', proc.returncode)
             if proc.stdout:
